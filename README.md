@@ -41,7 +41,18 @@ npm run browser-test
 
 Authentication remains local. By default, the runner uses the persistent Chromium profile `.local/kide-profile`, which keeps the browser’s session cookies and local storage on this machine for future runs. The directory is gitignored, and the automation never extracts, prints, uploads, or commits those values. On the first run, sign in in the visible browser; later runs reuse that local session. Delete `.local/kide-profile` when you intentionally want to sign out and reset the session. A `KIDE_CDP_URL` uses the attached browser’s own profile instead, and `KIDE_STORAGE_STATE` is an optional local alternative. Never commit tokens, cookies, passwords, OTPs, or payment data.
 
-The default mode keeps the visible browser open and shows a small checkbox in the top-left corner: `I’m logged in — enable refresh`. The watcher waits with no reloads until you turn that checkbox on. It then verifies that the visible Kide session is authenticated before the first watch cycle and immediately before every reload. Turning the checkbox off pauses before the next reload; turning it back on resumes. If the session is logged out or cannot be verified, it stops without refreshing or touching the cart. It verifies the matching variants before the next reload, so it does not reload after a target ticket is found. It then adds the variants to the cart. Use `DRY_RUN=true` for a non-mutating check. The implementation stops before checkout/payment and avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
+## Start the watcher
+
+Run `npm run dev` with `HEADLESS=false`. A visible Kide browser opens with the checkbox `I’m logged in — enable refresh` in the top-left corner:
+
+1. Sign in manually in that browser if the session is not already authenticated.
+2. Confirm the Kide account is visible, then turn the checkbox on.
+3. Leave it on while you want three-second availability polling.
+4. Turn it off to pause before the next reload; turn it back on to resume.
+
+The checkbox is only a start/pause control. The automation still verifies the actual visible Kide login state and stops safely if authentication cannot be confirmed. If it reports an authentication blocker, fix the session in the visible browser and run `npm run dev` again.
+
+The default mode keeps the visible browser open, verifies the matching variants before each cart action, and stops before checkout/payment. Use `DRY_RUN=true` for a non-mutating check. The implementation avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
 
 The command emits only this JSON shape on stdout:
 
