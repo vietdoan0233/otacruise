@@ -81,6 +81,9 @@ export class KideAutomationError extends Error {
   }
 }
 
+export const WATCH_CONTROL_ID = "otacruise-watch-control";
+const WATCH_ENABLED_STORAGE_KEY = "otacruise.watch.enabled";
+
 export type KideAuthenticationState =
   | "authenticated"
   | "unauthenticated"
@@ -174,6 +177,80 @@ export async function assertAuthenticatedSession(page: Page): Promise<void> {
   const state = await inspectAuthenticationState(page);
   if (state !== "authenticated") {
     throw new KideAutomationError(authenticationBlocker(state));
+  }
+}
+
+export async function installWatchControl(page: Page): Promise<void> {
+  await page.evaluate(({ controlId, storageKey }) => {
+    if (document.getElementById(controlId) || !document.body) return;
+
+    const control = document.createElement("label");
+    control.id = controlId;
+    control.setAttribute("data-otacruise-control", "true");
+    control.style.cssText = [
+      "position:fixed",
+      "top:12px",
+      "left:12px",
+      "z-index:2147483647",
+      "display:flex",
+      "align-items:center",
+      "gap:6px",
+      "padding:7px 9px",
+      "border:1px solid #777",
+      "border-radius:5px",
+      "background:#fff",
+      "color:#111",
+      "font:12px/1.2 sans-serif",
+      "box-shadow:0 1px 5px rgba(0,0,0,.25)",
+      "cursor:pointer",
+      "user-select:none",
+    ].join(";");
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.id = `${controlId}-checkbox`;
+    checkbox.setAttribute("aria-label", "I am logged in; enable ticket refresh");
+    try {
+      checkbox.checked = window.sessionStorage.getItem(storageKey) === "true";
+    } catch {
+      checkbox.checked = false;
+    }
+
+    const text = document.createElement("span");
+    text.textContent = "I’m logged in — enable refresh";
+    control.append(checkbox, text);
+    document.body.append(control);
+  }, { controlId: WATCH_CONTROL_ID, storageKey: WATCH_ENABLED_STORAGE_KEY });
+}
+
+async function watchControlIsEnabled(page: Page): Promise<boolean> {
+  await installWatchControl(page);
+  const checkbox = page.locator(`#${WATCH_CONTROL_ID}-checkbox`);
+  if (await checkbox.count() !== 1) {
+    throw new KideAutomationError(
+      "The refresh control could not be installed; no page refresh or cart action was attempted.",
+    );
+  }
+  return checkbox.isChecked();
+}
+
+async function persistWatchControlState(page: Page, enabled: boolean): Promise<void> {
+  await page.evaluate(({ storageKey, value }) => {
+    try {
+      window.sessionStorage.setItem(storageKey, value ? "true" : "false");
+    } catch {
+      // The checkbox remains the source of truth for this page if storage is unavailable.
+    }
+  }, { storageKey: WATCH_ENABLED_STORAGE_KEY, value: enabled });
+}
+
+async function waitForWatchEnabled(page: Page): Promise<void> {
+  while (true) {
+    if (await watchControlIsEnabled(page)) {
+      await persistWatchControlState(page, true);
+      return;
+    }
+    await delay(250);
   }
 }
 
@@ -501,43 +578,42 @@ async function loadProductPage(
   eventUrl: string,
   eventId: string,
 ): Promise<ProductInspection> {
+  const currentUrl = page.url();
+  const targetUrl = new URL(eventUrl);
+  let isSameEventPage = false;
+  let parsedCurrentUrl: URL | null = null;
+  try {
+    parsedCurrentUrl = new URL(currentUrl);
+    isSameEventPage =
+      parsedCurrentUrl.origin === targetUrl.origin &&
+      parsedCurrentUrl.pathname === targetUrl.pathname;
+  } catch {
+    isSameEventPage = false;
+  }
+
+  if (isSameEventPage) {
+    await waitForWatchEnabled(page);
+    // Check the visible session state immediately before every refresh.
+    // This intentionally fails closed: an unknown state must never cause a
+    // refresh that could discard a newly available ticket or reservation.
+    await assertAuthenticatedSession(page);
+  } else if (parsedCurrentUrl?.hostname === "kide.app") {
+    await assertAuthenticatedSession(page);
+  }
+
   const pendingProductResponse = waitForProductResponse(page, eventId, 30_000);
   try {
-    const currentUrl = page.url();
-    const targetUrl = new URL(eventUrl);
-    let isSameEventPage = false;
-    try {
-      const parsedCurrentUrl = new URL(currentUrl);
-      isSameEventPage =
-        parsedCurrentUrl.origin === targetUrl.origin &&
-        parsedCurrentUrl.pathname === targetUrl.pathname;
-    } catch {
-      isSameEventPage = false;
-    }
-
     if (isSameEventPage) {
-      // Check the visible session state immediately before every refresh.
-      // This intentionally fails closed: an unknown state must never cause a
-      // refresh that could discard a newly available ticket or reservation.
-      await assertAuthenticatedSession(page);
       await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
     } else {
-      const parsedCurrentUrl = (() => {
-        try {
-          return new URL(currentUrl);
-        } catch {
-          return null;
-        }
-      })();
-      if (parsedCurrentUrl?.hostname === "kide.app") {
-        await assertAuthenticatedSession(page);
-      }
       await page.goto(eventUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     }
     const payload = await pendingProductResponse.promise;
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
-    await assertAuthenticatedSession(page);
-    return inspectProductPage(page, payload);
+    if (isSameEventPage) await assertAuthenticatedSession(page);
+    const inspection = await inspectProductPage(page, payload);
+    await installWatchControl(page);
+    return inspection;
   } catch (error) {
     pendingProductResponse.cancel();
     throw error;
@@ -600,7 +676,9 @@ export async function waitForAvailability(
     try {
       inspection = await loadProductPage(page, options.eventUrl, eventId);
       // The first navigation may start from about:blank, so the session check
-      // happens after the event DOM exists and before any watch/reload cycle.
+      // and user confirmation happen after the event DOM exists and before any
+      // watch/reload cycle.
+      await waitForWatchEnabled(page);
       await assertAuthenticatedSession(page);
       break;
     } catch (error) {
@@ -610,6 +688,10 @@ export async function waitForAvailability(
   }
 
   while (true) {
+    // The checkbox is also a pause control for the verified snapshot. If the
+    // user turns it off while a response is being processed, wait before
+    // interpreting that snapshot or touching the cart.
+    await waitForWatchEnabled(page);
     const structureBlocker = expectedStructureBlocker(inspection);
     if (structureBlocker) return { inspection, blocker: structureBlocker };
 
@@ -888,6 +970,7 @@ export async function runKideAutomation(
     }
 
     try {
+      await waitForWatchEnabled(session.page);
       await addVariantsToCart(session.page, selection.selected);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Cart confirmation failed.";

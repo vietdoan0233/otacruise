@@ -7,8 +7,10 @@ import {
   addVariantsToCart,
   inspectAuthenticationState,
   inspectProductPage,
+  installWatchControl,
   parseProductPayload,
   resolveBrowserExecutable,
+  WATCH_CONTROL_ID,
   waitForAvailability,
 } from "../src/kide.js";
 import { selectFourPersonVariants, totalCents } from "../src/selector.js";
@@ -79,6 +81,27 @@ test("detects only an authenticated or unauthenticated state from visible UI mar
   }
 });
 
+test("the refresh checkbox can be turned on and off", async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    ...(resolveBrowserExecutable() ? { executablePath: resolveBrowserExecutable() } : {}),
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<!doctype html><main>Otacruise 2026</main>");
+    await installWatchControl(page);
+
+    const checkbox = page.locator(`#${WATCH_CONTROL_ID}-checkbox`);
+    assert.equal(await checkbox.isChecked(), false);
+    await checkbox.check();
+    assert.equal(await checkbox.isChecked(), true);
+    await checkbox.uncheck();
+    assert.equal(await checkbox.isChecked(), false);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("treats both Finnish sold-out labels as unavailable", async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -108,6 +131,9 @@ test("reloads while four-person variants are unavailable", async () => {
   });
   try {
     const page = await browser.newPage();
+    await page.addInitScript(() =>
+      window.sessionStorage.setItem("otacruise.watch.enabled", "true"),
+    );
     let productRequestCount = 0;
     const payloadWithAvailability = (availability: number) => ({
       model: {
@@ -185,6 +211,9 @@ test("does not reload after a matching ticket is available", async () => {
   });
   try {
     const page = await browser.newPage();
+    await page.addInitScript(() =>
+      window.sessionStorage.setItem("otacruise.watch.enabled", "true"),
+    );
     let productRequestCount = 0;
     await page.route("https://kide.app/fi/events/test", (route) =>
       route.fulfill({
