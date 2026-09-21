@@ -29,7 +29,7 @@ npm run browser-test
 
 Authentication remains local to a CDP-connected browser, persistent profile, or ignored storage state. Do not commit tokens, cookies, passwords, OTPs, or payment data.
 
-The default mode keeps the visible browser open and refreshes the event page every 10 seconds until availability appears. It then verifies the matching variants and adds them to the cart. Use `DRY_RUN=true` for a non-mutating check. The implementation stops before checkout/payment and avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
+The default mode keeps the visible browser open and refreshes the event page every 3 seconds until availability appears. It verifies the matching variants before the next reload, so it does not reload after a target ticket is found. It then adds the variants to the cart. Use `DRY_RUN=true` for a non-mutating check. The implementation stops before checkout/payment and avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
 
 The command emits only this JSON shape on stdout:
 

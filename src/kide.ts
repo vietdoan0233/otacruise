@@ -504,6 +504,8 @@ export async function waitForAvailability(
     }
 
     if (selection.selected.length > 0) {
+      // Return before the next delay/reload. The page is now the verified
+      // availability snapshot used for cart selection.
       return { inspection, blocker: null };
     }
 

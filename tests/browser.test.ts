@@ -8,6 +8,7 @@ import {
   inspectProductPage,
   parseProductPayload,
   resolveBrowserExecutable,
+  waitForAvailability,
 } from "../src/kide.js";
 import { selectFourPersonVariants, totalCents } from "../src/selector.js";
 
@@ -79,6 +80,44 @@ test("dry-run browser fixture selects exact four-person variants and verifies ca
 
     await addVariantsToCart(page, selection.selected);
     assert.equal(await page.locator(".o-color--validation-info").count(), 4);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("does not reload after a matching ticket is available", async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    ...(resolveBrowserExecutable() ? { executablePath: resolveBrowserExecutable() } : {}),
+  });
+  try {
+    const page = await browser.newPage();
+    let productRequestCount = 0;
+    await page.route("https://kide.app/fi/events/test", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: `${fixtureHtml()}<script>window.fetch("https://api.kide.app/api/products/test");</script>`,
+      }),
+    );
+    await page.route("https://api.kide.app/api/products/test", (route) => {
+      productRequestCount += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify(payload),
+      });
+    });
+    const result = await waitForAvailability(page, {
+      eventUrl: "https://kide.app/fi/events/test",
+      maxWaitMs: 10_000,
+      pollIntervalMs: 3_000,
+      watchForever: true,
+    });
+
+    assert.equal(result.blocker, null);
+    assert.equal(productRequestCount, 1);
   } finally {
     await browser.close();
   }
