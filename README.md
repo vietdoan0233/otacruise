@@ -29,7 +29,7 @@ npm run browser-test
 
 Authentication remains local to a CDP-connected browser, persistent profile, or ignored storage state. Do not commit tokens, cookies, passwords, OTPs, or payment data.
 
-`DRY_RUN=true` is the default and verifies the live page without changing the cart. Set it to `false` only when using the intended authenticated local session; the implementation still stops before checkout/payment. It also avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation.
+The default mode keeps the visible browser open and refreshes the event page every 10 seconds until availability appears. It then verifies the matching variants and adds them to the cart. Use `DRY_RUN=true` for a non-mutating check. The implementation stops before checkout/payment and avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
 
 The command emits only this JSON shape on stdout:
 
@@ -44,4 +44,4 @@ The command emits only this JSON shape on stdout:
 }
 ```
 
-Run the live dry run with `npm run dev`. Configure `KIDE_CDP_URL` to attach to an already-authenticated local browser, or use `KIDE_PROFILE_DIR`/`KIDE_STORAGE_STATE` for an ignored local session store. Never place a credential-bearing URL in logs or prompts.
+Run the watcher with `npm run dev`. Configure `KIDE_CDP_URL` to attach to an already-authenticated local browser, or use `KIDE_PROFILE_DIR`/`KIDE_STORAGE_STATE` for an ignored local session store. Never place a credential-bearing URL in logs or prompts. The final paid order remains a manual action.

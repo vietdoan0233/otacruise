@@ -50,6 +50,8 @@ export type KideAutomationOptions = {
   storageStatePath?: string;
   headless?: boolean;
   dryRun?: boolean;
+  watchForever?: boolean;
+  keepBrowserOpen?: boolean;
   maxWaitMs?: number;
   pollIntervalMs?: number;
 };
@@ -65,6 +67,11 @@ type ParsedProduct = {
   eventTitle: string | null;
   variants: TicketVariant[];
   saleCountdownText: string | null;
+};
+
+type PendingProductResponse = {
+  promise: Promise<unknown>;
+  cancel: () => void;
 };
 
 export class KideAutomationError extends Error {
@@ -330,13 +337,21 @@ function isProductResponse(response: Response, eventId: string): boolean {
   );
 }
 
-async function waitForProductResponse(
+function waitForProductResponse(
   page: Page,
   eventId: string,
   timeoutMs: number,
-): Promise<unknown> {
-  return new Promise((resolveResponse, reject) => {
+): PendingProductResponse {
+  let cancelResponse: () => void = () => {};
+  const promise = new Promise<unknown>((resolveResponse, reject) => {
     let settled = false;
+    const clearResponse = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      page.off("response", onResponse);
+    };
+
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -372,8 +387,11 @@ async function waitForProductResponse(
       }
     };
 
+    cancelResponse = clearResponse;
     page.on("response", onResponse);
   });
+
+  return { promise, cancel: cancelResponse };
 }
 
 async function loadProductPage(
@@ -381,11 +399,32 @@ async function loadProductPage(
   eventUrl: string,
   eventId: string,
 ): Promise<ProductInspection> {
-  const productResponse = waitForProductResponse(page, eventId, 30_000);
-  await page.goto(eventUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  const payload = await productResponse;
-  await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
-  return inspectProductPage(page, payload);
+  const pendingProductResponse = waitForProductResponse(page, eventId, 30_000);
+  try {
+    const currentUrl = page.url();
+    const targetUrl = new URL(eventUrl);
+    let isSameEventPage = false;
+    try {
+      const parsedCurrentUrl = new URL(currentUrl);
+      isSameEventPage =
+        parsedCurrentUrl.origin === targetUrl.origin &&
+        parsedCurrentUrl.pathname === targetUrl.pathname;
+    } catch {
+      isSameEventPage = false;
+    }
+
+    if (isSameEventPage) {
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
+    } else {
+      await page.goto(eventUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    }
+    const payload = await pendingProductResponse.promise;
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
+    return inspectProductPage(page, payload);
+  } catch (error) {
+    pendingProductResponse.cancel();
+    throw error;
+  }
 }
 
 function expectedStructureBlocker(inspection: ProductInspection): string | null {
@@ -420,13 +459,35 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
+function isRetryableWatchError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /product API response was not observed|valid JSON|timeout|navigation|ERR_/i.test(
+    message,
+  );
+}
+
 export async function waitForAvailability(
   page: Page,
-  options: Required<Pick<KideAutomationOptions, "eventUrl" | "maxWaitMs" | "pollIntervalMs">>,
+  options: Required<
+    Pick<
+      KideAutomationOptions,
+      "eventUrl" | "maxWaitMs" | "pollIntervalMs" | "watchForever"
+    >
+  >,
 ): Promise<{ inspection: ProductInspection; blocker: string | null }> {
   const eventId = eventIdFromUrl(options.eventUrl);
   const deadline = Date.now() + options.maxWaitMs;
-  let inspection = await loadProductPage(page, options.eventUrl, eventId);
+  let inspection: ProductInspection;
+
+  while (true) {
+    try {
+      inspection = await loadProductPage(page, options.eventUrl, eventId);
+      break;
+    } catch (error) {
+      if (!options.watchForever || !isRetryableWatchError(error)) throw error;
+      await delay(options.pollIntervalMs);
+    }
+  }
 
   while (true) {
     const structureBlocker = expectedStructureBlocker(inspection);
@@ -446,7 +507,11 @@ export async function waitForAvailability(
       return { inspection, blocker: null };
     }
 
-    if (allTicketRowsSoldOut(inspection) && !inspection.saleCountdownText) {
+    if (
+      !options.watchForever &&
+      allTicketRowsSoldOut(inspection) &&
+      !inspection.saleCountdownText
+    ) {
       const soldOutNames = inspection.domVariants
         .filter((variant) => variant.disabled || SOLD_OUT_TEXT.test(variant.text))
         .map((variant) => variant.name)
@@ -457,7 +522,11 @@ export async function waitForAvailability(
       };
     }
 
-    if (allFourPersonVariantsUnavailable(inspection) && !inspection.saleCountdownText) {
+    if (
+      !options.watchForever &&
+      allFourPersonVariantsUnavailable(inspection) &&
+      !inspection.saleCountdownText
+    ) {
       const unavailableNames = inspection.variants
         .filter(isFourPersonVariant)
         .map((variant) => variant.name)
@@ -468,7 +537,7 @@ export async function waitForAvailability(
       };
     }
 
-    if (Date.now() >= deadline) {
+    if (!options.watchForever && Date.now() >= deadline) {
       return {
         inspection,
         blocker: inspection.saleCountdownText
@@ -478,7 +547,11 @@ export async function waitForAvailability(
     }
 
     await delay(options.pollIntervalMs);
-    inspection = await loadProductPage(page, options.eventUrl, eventId);
+    try {
+      inspection = await loadProductPage(page, options.eventUrl, eventId);
+    } catch (error) {
+      if (!options.watchForever || !isRetryableWatchError(error)) throw error;
+    }
   }
 }
 
@@ -639,8 +712,10 @@ export async function runKideAutomation(
 ): Promise<AutomationOutput> {
   const eventUrl = options.eventUrl ?? DEFAULT_EVENT_URL;
   const maxWaitMs = options.maxWaitMs ?? 30 * 60 * 1000;
-  const pollIntervalMs = options.pollIntervalMs ?? 10_000;
-  const dryRun = options.dryRun ?? true;
+  const pollIntervalMs = Math.max(options.pollIntervalMs ?? 10_000, 1_000);
+  const dryRun = options.dryRun ?? false;
+  const watchForever = options.watchForever ?? true;
+  const keepBrowserOpen = options.keepBrowserOpen ?? true;
   const session = await createBrowserSession({
     ...options,
     eventUrl,
@@ -653,6 +728,7 @@ export async function runKideAutomation(
       eventUrl,
       maxWaitMs,
       pollIntervalMs,
+      watchForever,
     });
     const selection = selectFourPersonVariants(inspection.variants);
 
@@ -706,6 +782,6 @@ export async function runKideAutomation(
       `${summary} All verified variants were added to the cart. Stopped before the final paid-order/payment action.`,
     );
   } finally {
-    await session.close();
+    if (!keepBrowserOpen) await session.close();
   }
 }

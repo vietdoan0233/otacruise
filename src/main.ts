@@ -38,7 +38,9 @@ try {
     profileDir,
     storageStatePath,
     headless: booleanEnvironment("HEADLESS", false),
-    dryRun: booleanEnvironment("DRY_RUN", true),
+    dryRun: booleanEnvironment("DRY_RUN", false),
+    watchForever: booleanEnvironment("KIDE_WATCH_FOREVER", true),
+    keepBrowserOpen: booleanEnvironment("KIDE_KEEP_BROWSER_OPEN", true),
     maxWaitMs: integerEnvironment("KIDE_MAX_WAIT_MS", 30 * 60 * 1000),
     pollIntervalMs: integerEnvironment("KIDE_POLL_INTERVAL_MS", 10_000),
   });
