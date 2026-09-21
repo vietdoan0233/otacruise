@@ -16,11 +16,23 @@ The adapter listens only to the Kide product API response for IDs, labels, price
 
 The live page currently reports all nine ticket rows as sold out, using `Loppuun varattu` and `Loppuunmyyty`. The runner recognizes both live labels, returns the blocker in the structured `reason` field, and makes no cart change.
 
+## Get the repository
+
+Anyone with Git and Node.js can install it in their own directory:
+
+```powershell
+git clone https://github.com/vietdoan0233/otacruise.git
+Set-Location .\otacruise
+```
+
+The commands below assume the terminal is inside the cloned `otacruise` directory. No user-specific path is required.
+
 ## Setup
 
 ```powershell
 npm install
 Copy-Item .env.example .env
+npx playwright install chromium
 npm run typecheck
 npm run lint
 npm test
@@ -49,8 +61,6 @@ Run the watcher with `npm run dev`. The default `.local/kide-profile` session is
 ### Run the watcher from PowerShell
 
 ```powershell
-cd C:\Users\Thien\Documents\Codex\2026-09-21\cr
-
 $env:DRY_RUN="false"
 $env:KIDE_WATCH_FOREVER="true"
 $env:KIDE_KEEP_BROWSER_OPEN="true"
