@@ -53,7 +53,8 @@ function loadLocalEnvironment(): void {
 loadLocalEnvironment();
 
 const storageStatePath = process.env.KIDE_STORAGE_STATE;
-const profileDir = process.env.KIDE_PROFILE_DIR ??
+const configuredProfileDir = process.env.KIDE_PROFILE_DIR?.trim();
+const profileDir = configuredProfileDir ||
   (storageStatePath ? undefined : resolve(".local/kide-profile"));
 
 let output: AutomationOutput;
