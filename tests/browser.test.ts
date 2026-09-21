@@ -79,6 +79,28 @@ test("detects only an authenticated or unauthenticated state from visible UI mar
   }
 });
 
+test("treats both Finnish sold-out labels as unavailable", async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    ...(resolveBrowserExecutable() ? { executablePath: resolveBrowserExecutable() } : {}),
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><main>${payload.model.variants
+      .map(
+        (variant) =>
+          `<o-item ng-repeat-start="variant in product.productVariants">${variant.name} Loppuunmyyty</o-item>`,
+      )
+      .join("")}</main>`);
+
+    const inspection = await inspectProductPage(page, payload);
+    assert.equal(inspection.variants.every((variant) => !variant.available), true);
+    assert.equal(selectFourPersonVariants(inspection.variants).selected.length, 0);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("dry-run browser fixture selects exact four-person variants and verifies cart rows", async () => {
   const browser = await chromium.launch({
     headless: true,

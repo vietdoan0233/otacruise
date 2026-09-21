@@ -27,7 +27,7 @@ export const DEFAULT_EVENT_URL =
 const API_HOST = "api.kide.app";
 const VARIANT_ROW_SELECTOR =
   'o-item[ng-repeat-start*="variant in product.productVariants"]';
-const SOLD_OUT_TEXT = /loppuun varattu|sold out/i;
+const SOLD_OUT_TEXT = /loppuun\s*(?:varattu|myyty)|sold\s*out/i;
 const RESERVED_TEXT = /varattu|reserved/i;
 const EXPECTED_VARIANT_NAMES = [
   "Cabin A, 2 pers.",
@@ -336,7 +336,7 @@ function extractVisibleVariantName(text: string): string {
   if (knownMatch) return knownMatch;
 
   return normalizedText
-    .replace(/loppuun varattu|sold out|varattu|reserved/gi, "")
+    .replace(/loppuun\s*(?:varattu|myyty)|sold\s*out|varattu|reserved/gi, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -385,8 +385,14 @@ function mergeNetworkAndDom(
 
     return {
       ...variant,
-      available: variant.available && !domVariant.disabled,
-      stock: domVariant.disabled ? 0 : variant.stock,
+      available:
+        variant.available &&
+        !domVariant.disabled &&
+        !SOLD_OUT_TEXT.test(domVariant.text),
+      stock:
+        domVariant.disabled || SOLD_OUT_TEXT.test(domVariant.text)
+          ? 0
+          : variant.stock,
     };
   });
 }

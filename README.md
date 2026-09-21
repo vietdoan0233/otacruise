@@ -14,7 +14,7 @@ Selecting every matching variant means four separate cabins for 16 people and a 
 
 The adapter listens only to the Kide product API response for IDs, labels, prices, stock, and quantity limits, then cross-checks availability against the visible ticket rows. It never prints response bodies, cookies, tokens, passwords, OTPs, payment details, or screenshots.
 
-The live page currently reports every one of the nine ticket rows as `Loppuun varattu` (sold out). The runner returns that exact blocker in the structured `reason` field and makes no cart change.
+The live page currently reports all nine ticket rows as sold out, using `Loppuun varattu` and `Loppuunmyyty`. The runner recognizes both live labels, returns the blocker in the structured `reason` field, and makes no cart change.
 
 ## Setup
 
