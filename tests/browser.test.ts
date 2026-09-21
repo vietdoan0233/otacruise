@@ -101,6 +101,56 @@ test("treats both Finnish sold-out labels as unavailable", async () => {
   }
 });
 
+test("reloads while four-person variants are unavailable", async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    ...(resolveBrowserExecutable() ? { executablePath: resolveBrowserExecutable() } : {}),
+  });
+  try {
+    const page = await browser.newPage();
+    let productRequestCount = 0;
+    const payloadWithAvailability = (availability: number) => ({
+      model: {
+        product: { name: "Otacruise 2026", salesStarted: true },
+        variants: payload.model.variants.map((variant) => ({
+          ...variant,
+          availability,
+          productVariantMaximumItemQuantityPerUser: 1,
+        })),
+      },
+    });
+
+    await page.route("https://kide.app/fi/events/watch", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: `${fixtureHtml()}<script>window.fetch("https://api.kide.app/api/products/watch");</script>`,
+      }),
+    );
+    await page.route("https://api.kide.app/api/products/watch", (route) => {
+      productRequestCount += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify(payloadWithAvailability(productRequestCount === 1 ? 0 : 1)),
+      });
+    });
+
+    const result = await waitForAvailability(page, {
+      eventUrl: "https://kide.app/fi/events/watch",
+      maxWaitMs: 1_000,
+      pollIntervalMs: 10,
+      watchForever: true,
+    });
+
+    assert.equal(result.blocker, null);
+    assert.equal(productRequestCount, 2);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("dry-run browser fixture selects exact four-person variants and verifies cart rows", async () => {
   const browser = await chromium.launch({
     headless: true,

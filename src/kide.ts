@@ -640,7 +640,7 @@ export async function waitForAvailability(
         .join(", ");
       return {
         inspection,
-        blocker: `Kide reports all ticket rows sold out ("Loppuun varattu"): ${soldOutNames}.`,
+        blocker: `Kide reports all ticket rows sold out ("Loppuun varattu"/"Loppuunmyyty"): ${soldOutNames}.`,
       };
     }
 

@@ -61,3 +61,7 @@ npm run dev
 ```
 
 The browser checks the visible login state before refreshing every three seconds. It stops with an authentication blocker if you are logged out or the state is unclear. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher.
+
+### If the page appears stuck
+
+Keep the terminal running `npm run dev` open. With `KIDE_WATCH_FOREVER=true`, a sold-out page is reloaded every 3 seconds; the browser-test suite verifies this polling behavior. If the process prints JSON immediately, read the `reason`: an authentication blocker means the session was not visibly verified, while `KIDE_WATCH_FOREVER=false` intentionally stops after the first sold-out check. The watcher also stops reloading as soon as a matching four-person ticket is found so it can verify and add that snapshot to the cart.
