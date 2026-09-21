@@ -45,3 +45,19 @@ The command emits only this JSON shape on stdout:
 ```
 
 Run the watcher with `npm run dev`. Configure `KIDE_CDP_URL` to attach to an already-authenticated local browser, or use `KIDE_PROFILE_DIR`/`KIDE_STORAGE_STATE` for an ignored local session store. Never place a credential-bearing URL in logs or prompts. The final paid order remains a manual action.
+
+### Run the watcher from PowerShell
+
+```powershell
+cd C:\Users\Thien\Documents\Codex\2026-09-21\cr
+
+$env:DRY_RUN="false"
+$env:KIDE_WATCH_FOREVER="true"
+$env:KIDE_KEEP_BROWSER_OPEN="true"
+$env:KIDE_POLL_INTERVAL_MS="3000"
+$env:HEADLESS="false"
+
+npm run dev
+```
+
+The browser refreshes every three seconds until a matching ticket is found, then adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher.
