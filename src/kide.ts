@@ -81,6 +81,102 @@ export class KideAutomationError extends Error {
   }
 }
 
+export type KideAuthenticationState =
+  | "authenticated"
+  | "unauthenticated"
+  | "unknown";
+
+function authenticationBlocker(
+  state: Exclude<KideAuthenticationState, "authenticated">,
+): string {
+  if (state === "unauthenticated") {
+    return "Kide session is not authenticated; no refresh or cart action was attempted. Sign in in the local browser and rerun.";
+  }
+  return "Could not verify Kide authentication state from the visible page; no refresh or cart action was attempted.";
+}
+
+export async function inspectAuthenticationState(
+  page: Page,
+): Promise<KideAuthenticationState> {
+  return page.evaluate(() => {
+    const bodyText = document.body?.innerText ?? "";
+    let interactiveText = "";
+    for (const element of Array.from(
+      document.querySelectorAll("button, a, [role='button'], [ng-click]"),
+    )) {
+      const style = window.getComputedStyle(element);
+      const rectangle = element.getBoundingClientRect();
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        rectangle.width <= 0 ||
+        rectangle.height <= 0
+      ) continue;
+      interactiveText += [
+        element.textContent ?? "",
+        element.getAttribute("aria-label") ?? "",
+        element.getAttribute("title") ?? "",
+        element.getAttribute("ng-click") ?? "",
+        element.getAttribute("href") ?? "",
+      ].join(" ");
+    }
+    const visibleText = `${bodyText} ${interactiveText}`.toLowerCase();
+
+    let hasAccountControl = false;
+    for (const element of Array.from(document.querySelectorAll("[ng-click]"))) {
+      const style = window.getComputedStyle(element);
+      const rectangle = element.getBoundingClientRect();
+      if (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rectangle.width > 0 &&
+        rectangle.height > 0 &&
+        /account\.profile|account\.settings/i.test(
+          element.getAttribute("ng-click") ?? "",
+        )
+      ) {
+        hasAccountControl = true;
+        break;
+      }
+    }
+    const hasAuthenticatedControl =
+      /logout|log out|sign out|kirjaudu ulos/.test(visibleText) ||
+      hasAccountControl;
+    const hasAuthenticatedGreeting =
+      /\bhei\b/.test(bodyText.toLowerCase()) &&
+      /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i.test(bodyText);
+    let hasLoginAction = false;
+    for (const element of Array.from(document.querySelectorAll("[ng-click]"))) {
+      const style = window.getComputedStyle(element);
+      const rectangle = element.getBoundingClientRect();
+      if (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rectangle.width > 0 &&
+        rectangle.height > 0 &&
+        /showlogin|login/i.test(element.getAttribute("ng-click") ?? "")
+      ) {
+        hasLoginAction = true;
+        break;
+      }
+    }
+    const hasLoginControl =
+      /\blogin\b|\bsign in\b|\bkirjaudu\b/.test(visibleText) ||
+      hasLoginAction;
+
+    if (hasAuthenticatedControl || hasAuthenticatedGreeting) return "authenticated";
+    if (hasLoginControl) return "unauthenticated";
+    return "unknown";
+  });
+}
+
+export async function assertAuthenticatedSession(page: Page): Promise<void> {
+  const state = await inspectAuthenticationState(page);
+  if (state !== "authenticated") {
+    throw new KideAutomationError(authenticationBlocker(state));
+  }
+}
+
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
@@ -414,12 +510,27 @@ async function loadProductPage(
     }
 
     if (isSameEventPage) {
+      // Check the visible session state immediately before every refresh.
+      // This intentionally fails closed: an unknown state must never cause a
+      // refresh that could discard a newly available ticket or reservation.
+      await assertAuthenticatedSession(page);
       await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
     } else {
+      const parsedCurrentUrl = (() => {
+        try {
+          return new URL(currentUrl);
+        } catch {
+          return null;
+        }
+      })();
+      if (parsedCurrentUrl?.hostname === "kide.app") {
+        await assertAuthenticatedSession(page);
+      }
       await page.goto(eventUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     }
     const payload = await pendingProductResponse.promise;
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
+    await assertAuthenticatedSession(page);
     return inspectProductPage(page, payload);
   } catch (error) {
     pendingProductResponse.cancel();
@@ -482,6 +593,9 @@ export async function waitForAvailability(
   while (true) {
     try {
       inspection = await loadProductPage(page, options.eventUrl, eventId);
+      // The first navigation may start from about:blank, so the session check
+      // happens after the event DOM exists and before any watch/reload cycle.
+      await assertAuthenticatedSession(page);
       break;
     } catch (error) {
       if (!options.watchForever || !isRetryableWatchError(error)) throw error;

@@ -29,7 +29,7 @@ npm run browser-test
 
 Authentication remains local to a CDP-connected browser, persistent profile, or ignored storage state. Do not commit tokens, cookies, passwords, OTPs, or payment data.
 
-The default mode keeps the visible browser open and refreshes the event page every 3 seconds until availability appears. It verifies the matching variants before the next reload, so it does not reload after a target ticket is found. It then adds the variants to the cart. Use `DRY_RUN=true` for a non-mutating check. The implementation stops before checkout/payment and avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
+The default mode keeps the visible browser open and refreshes the event page every 3 seconds until availability appears. It verifies that the visible Kide session is authenticated before the first watch cycle and immediately before every reload. If the session is logged out or cannot be verified, it stops without refreshing or touching the cart. It verifies the matching variants before the next reload, so it does not reload after a target ticket is found. It then adds the variants to the cart. Use `DRY_RUN=true` for a non-mutating check. The implementation stops before checkout/payment and avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
 
 The command emits only this JSON shape on stdout:
 
@@ -60,4 +60,4 @@ $env:HEADLESS="false"
 npm run dev
 ```
 
-The browser refreshes every three seconds until a matching ticket is found, then adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher.
+The browser checks the visible login state before refreshing every three seconds. It stops with an authentication blocker if you are logged out or the state is unclear. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher.

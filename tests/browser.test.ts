@@ -5,6 +5,7 @@ import { chromium } from "playwright";
 
 import {
   addVariantsToCart,
+  inspectAuthenticationState,
   inspectProductPage,
   parseProductPayload,
   resolveBrowserExecutable,
@@ -41,7 +42,7 @@ function fixtureHtml(): string {
     ["Cabin C, 3 pers.", 294],
     ["Cabin C, 4 pers.", 366],
   ];
-  return `<!doctype html><main>${variants
+  return `<!doctype html><header><o-item ng-click="body.onNavigate(origin.constants.states.account.profile, null, true)"><o-text__description>Hei, user@example.test</o-text__description></o-item></header><main>${variants
     .map(
       ([name, price]) =>
         `<o-item ng-repeat-start="variant in product.productVariants" class="o-align-items--flex-start"><o-text><o-text__heading>${name}</o-text__heading><o-chip class="o-chip--sm">${price}€</o-chip></o-text></o-item>`,
@@ -57,6 +58,26 @@ function fixtureHtml(): string {
       });
     </script>`;
 }
+
+test("detects only an authenticated or unauthenticated state from visible UI markers", async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    ...(resolveBrowserExecutable() ? { executablePath: resolveBrowserExecutable() } : {}),
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<button>Kirjaudu</button>');
+    assert.equal(await inspectAuthenticationState(page), "unauthenticated");
+
+    await page.setContent('<o-item ng-click="account.profile"><span>Hei, user@example.test</span></o-item>');
+    assert.equal(await inspectAuthenticationState(page), "authenticated");
+
+    await page.setContent('<main>Otacruise 2026</main>');
+    assert.equal(await inspectAuthenticationState(page), "unknown");
+  } finally {
+    await browser.close();
+  }
+});
 
 test("dry-run browser fixture selects exact four-person variants and verifies cart rows", async () => {
   const browser = await chromium.launch({
