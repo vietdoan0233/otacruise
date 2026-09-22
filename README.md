@@ -73,6 +73,8 @@ Run the watcher with `npm run dev`. The default `.local/kide-profile` session is
 
 ### Run the watcher from PowerShell
 
+Use this complete block in the same PowerShell window where you start the watcher. The checkbox starts unchecked; checking it enables the loop. `KIDE_WATCH_FOREVER="true"` is what keeps checking sold-out responses, and `KIDE_POLL_INTERVAL_MS="1000"` sets the minimum one-second interval. These settings are already included below—do not add a second copy elsewhere.
+
 ```powershell
 $env:DRY_RUN="false"
 $env:KIDE_WATCH_FOREVER="true"
@@ -83,7 +85,7 @@ $env:HEADLESS="false"
 npm run dev
 ```
 
-The browser checks the visible login state before refreshing every one second. It stops with an authentication blocker if you are logged out or the state is unclear. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher.
+The browser checks the visible login state before each refresh. With the block above, a sold-out response is followed by another reload every second until you pause the checkbox, stop the process, authentication becomes unclear, or a matching ticket is found. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher. If it refreshes once and then stops, read the JSON `reason` printed by the process; `KIDE_WATCH_FOREVER="false"`, an authentication blocker, or a matching ticket are the expected explanations.
 
 ### If the page appears stuck
 
