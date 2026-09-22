@@ -37,3 +37,27 @@ test("does not guess when a threshold has an unknown visible label", () => {
   assert.deepEqual(result.selected, []);
   assert.deepEqual(result.ambiguous.map((variant) => variant.id), ["unknown"]);
 });
+
+test("fails closed when a known four-person label is duplicated", () => {
+  const result = selectFourPersonVariants([
+    {
+      id: "a4-1",
+      name: "Cabin A, 4 pers.",
+      totalPriceCents: 39800,
+      available: true,
+      stock: null,
+      maxQuantity: 1,
+    },
+    {
+      id: "a4-2",
+      name: "Cabin A, 4 pers.",
+      totalPriceCents: 39800,
+      available: true,
+      stock: null,
+      maxQuantity: 1,
+    },
+  ]);
+
+  assert.deepEqual(result.selected, []);
+  assert.deepEqual(result.ambiguous.map((variant) => variant.id), ["a4-1", "a4-2"]);
+});

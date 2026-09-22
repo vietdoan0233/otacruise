@@ -7,6 +7,7 @@
     "dev": "tsx src/main.ts",
     "test": "tsx --test tests/*.test.ts",
     "browser-test": "tsx --test tests/browser.test.ts",
+    "browser-fixture:headed": "tsx tests/headed-fixture.ts",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters"
   },
@@ -16,5 +17,9 @@
     "playwright": "^1.63.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }

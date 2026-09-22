@@ -14,7 +14,9 @@ Selecting every matching variant means four separate cabins for 16 people and a 
 
 The adapter listens only to the Kide product API response for IDs, labels, prices, stock, and quantity limits, then cross-checks availability against the visible ticket rows. It never prints response bodies, cookies, tokens, passwords, OTPs, payment details, or screenshots.
 
-The live page currently reports all nine ticket rows as sold out, using `Loppuun varattu` and `Loppuunmyyty`. The runner recognizes both live labels, returns the blocker in the structured `reason` field, and makes no cart change.
+The browser is created through a single `playwright-extra` launcher with `puppeteer-extra-plugin-stealth` registered before any browser or context is opened. This keeps the headless Playwright contexts consistent across regular, persistent-profile, and fixture runs, including webdriver, WebGL/canvas, language, plugin, and related automation evasions. Stealth does not replace authentication: a real visible Kide session is still required.
+
+If the live page reports all nine ticket rows as sold out, using `Loppuun varattu` and `Loppuunmyyty`, the runner recognizes both labels, returns the exact blocker in the structured `reason` field, and makes no cart change.
 
 ## Get the repository
 
@@ -43,14 +45,14 @@ Authentication remains local. By default, the runner uses the persistent Chromiu
 
 ## Start the watcher
 
-Run `npm run dev` with `HEADLESS=false`. A visible Kide browser opens with the checkbox `I’m logged in — enable refresh` in the top-left corner:
+Run `npm run dev` with `HEADLESS=false`. After the Kide event page loads, a visible top-left checkbox labeled exactly `I’m logged in — enable refresh` appears. It starts unchecked:
 
 1. Sign in manually in that browser if the session is not already authenticated.
 2. Confirm the Kide account is visible, then turn the checkbox on.
-3. Leave it on while you want three-second availability polling.
-4. Turn it off to pause before the next reload; turn it back on to resume.
+3. Leave it on while you want one-second availability polling.
+4. Turn it off to pause before the next reload or availability interpretation; turn it back on to resume.
 
-The checkbox is only a start/pause control. The automation still verifies the actual visible Kide login state and stops safely if authentication cannot be confirmed. If it reports an authentication blocker, fix the session in the visible browser and run `npm run dev` again.
+The checkbox is only a start/pause control. Its checked and unchecked values are saved immediately in `sessionStorage` under `otacruise.watch.enabled` and restored after a reload. The control is reinstalled if Kide/Angular replaces `document.body`, without creating duplicate controls or handlers, and it is pointer-transparent outside its own checkbox hit area. The automation still verifies the actual visible Kide login state before every reload and cart action, and stops safely if authentication cannot be confirmed. If it reports an authentication blocker, fix the session in the visible browser and run `npm run dev` again.
 
 The default mode keeps the visible browser open, verifies the matching variants before each cart action, and stops before checkout/payment. Use `DRY_RUN=true` for a non-mutating check. The implementation avoids clicking an already-reserved row because Kide uses that click to cancel/edit the reservation. Press `Ctrl+C` to stop the watcher.
 
@@ -75,14 +77,27 @@ Run the watcher with `npm run dev`. The default `.local/kide-profile` session is
 $env:DRY_RUN="false"
 $env:KIDE_WATCH_FOREVER="true"
 $env:KIDE_KEEP_BROWSER_OPEN="true"
-$env:KIDE_POLL_INTERVAL_MS="3000"
+$env:KIDE_POLL_INTERVAL_MS="1000"
 $env:HEADLESS="false"
 
 npm run dev
 ```
 
-The browser checks the visible login state before refreshing every three seconds. It stops with an authentication blocker if you are logged out or the state is unclear. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher.
+The browser checks the visible login state before refreshing every one second. It stops with an authentication blocker if you are logged out or the state is unclear. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher.
 
 ### If the page appears stuck
 
-Keep the terminal running `npm run dev` open. Turn on the top-left refresh checkbox after confirming you are logged in. With `KIDE_WATCH_FOREVER=true`, a sold-out page is reloaded every 3 seconds; the browser-test suite verifies this polling behavior. If the process prints JSON immediately, read the `reason`: an authentication blocker means the session was not visibly verified, while `KIDE_WATCH_FOREVER=false` intentionally stops after the first sold-out check. The watcher also stops reloading as soon as a matching four-person ticket is found so it can verify and add that snapshot to the cart.
+Keep the terminal running `npm run dev` open. Turn on the top-left refresh checkbox after confirming you are logged in. With `KIDE_WATCH_FOREVER=true`, a sold-out page is reloaded every second; turning the checkbox off prevents the next reload, API snapshot interpretation, selection, or cart action. If the process prints JSON immediately, read the `reason`: an authentication blocker means the session was not visibly verified, while `KIDE_WATCH_FOREVER=false` intentionally stops after the first sold-out check. The watcher also stops reloading as soon as a matching four-person ticket is found so it can verify and add that snapshot to the cart.
+
+### Troubleshooting the checkbox or authentication
+
+- If the checkbox is missing, confirm the browser is on the configured HTTPS `kide.app/fi/events/<event-id>` page and wait for the page body to finish rendering. The control is recreated after full reloads and Angular body replacements. A temporary profile can be reset by deleting the ignored `.local/kide-profile` directory, then signing in again in the visible browser.
+- If it appears but is unchecked, that is the safe default. Click the checkbox itself; its visual state and `sessionStorage` value change immediately. Leave it unchecked to pause.
+- If the output says authentication is missing or unclear, do not try to bypass the blocker. Sign in manually in the visible local profile and confirm Kide shows a visible account/logout/profile marker, then rerun. The checkbox never counts as proof of authentication.
+- The runner never opens checkout or clicks the final payment action. The fixture suite also asserts four cart rows, 16 people, and €1,548 before fees without reaching payment.
+
+For a visible deterministic browser demonstration that uses only a temporary fixture and no real profile, run:
+
+```powershell
+npm run browser-fixture:headed
+```

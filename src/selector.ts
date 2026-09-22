@@ -34,13 +34,27 @@ export function selectFourPersonVariants(
   const selected: TicketVariant[] = [];
   const ambiguous: TicketVariant[] = [];
   const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
 
   for (const variant of matching) {
-    if (seenIds.has(variant.id) || !isKnownFourPersonLabel(variant)) {
+    const normalizedName = normalizeVariantName(variant.name);
+    if (
+      seenIds.has(variant.id) ||
+      seenNames.has(normalizedName) ||
+      !isKnownFourPersonLabel(variant)
+    ) {
+      const priorIndex = selected.findIndex(
+        (selectedVariant) => normalizeVariantName(selectedVariant.name) === normalizedName,
+      );
+      if (priorIndex >= 0) {
+        ambiguous.push(selected[priorIndex]);
+        selected.splice(priorIndex, 1);
+      }
       ambiguous.push(variant);
       continue;
     }
     seenIds.add(variant.id);
+    seenNames.add(normalizedName);
     selected.push(variant);
   }
 

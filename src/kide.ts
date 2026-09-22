@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  chromium,
   type Browser,
   type BrowserContext,
   type Page,
   type Response,
 } from "playwright";
+
+import { chromium, installStealthContextInitScript } from "./browser.js";
 
 import {
   isFourPersonVariant,
@@ -82,7 +83,116 @@ export class KideAutomationError extends Error {
 }
 
 export const WATCH_CONTROL_ID = "otacruise-watch-control";
-const WATCH_ENABLED_STORAGE_KEY = "otacruise.watch.enabled";
+export const WATCH_CONTROL_CHECKBOX_ID = `${WATCH_CONTROL_ID}-checkbox`;
+export const WATCH_CONTROL_LABEL = "I’m logged in — enable refresh";
+export const WATCH_ENABLED_STORAGE_KEY = "otacruise.watch.enabled";
+
+type WatchControlPageOptions = {
+  controlId: string;
+  checkboxId: string;
+  storageKey: string;
+  label: string;
+};
+
+const pagesWithWatchControlInitScript = new WeakSet<Page>();
+
+const WATCH_CONTROL_PAGE_SCRIPT = String.raw`
+function otacruiseWatchControl(options) {
+  if (window.top !== window) return;
+  const pageWindow = window;
+  const observerKey = "__otacruiseWatchObserver";
+  const handlerFlag = "__otacruiseWatchChangeHandler";
+  const styles = [
+    "position:fixed", "top:12px", "left:12px", "z-index:2147483647",
+    "display:flex", "align-items:center", "gap:6px",
+    "max-width:calc(100vw - 24px)", "padding:7px 9px",
+    "border:1px solid #777", "border-radius:5px", "background:#fff",
+    "color:#111", "font:12px/1.2 sans-serif",
+    "box-shadow:0 1px 5px rgba(0,0,0,.25)", "cursor:pointer",
+    "user-select:none"
+  ].join(";");
+
+  function readStoredState() {
+    try { return window.sessionStorage.getItem(options.storageKey) === "true"; }
+    catch { return false; }
+  }
+
+  function persistState(checkbox) {
+    try {
+      window.sessionStorage.setItem(options.storageKey, checkbox.checked ? "true" : "false");
+    } catch {
+      // The current checkbox remains the source of truth if storage is unavailable.
+    }
+  }
+
+  function bindCheckbox(checkbox) {
+    checkbox.id = options.checkboxId;
+    checkbox.type = "checkbox";
+    checkbox.setAttribute("aria-label", options.label);
+    checkbox.title = options.label;
+    if (!checkbox[handlerFlag]) {
+      checkbox.addEventListener("change", function () { persistState(checkbox); });
+      checkbox.addEventListener("click", function (event) { event.stopPropagation(); });
+      checkbox[handlerFlag] = true;
+    }
+  }
+
+  function ensureControl() {
+    const body = document.body;
+    if (!body) return;
+    const candidates = Array.from(document.querySelectorAll(
+      '[data-otacruise-control="true"], #' + options.controlId
+    ));
+    const control = candidates[0] || document.createElement("label");
+    candidates.slice(1).forEach(function (duplicate) { duplicate.remove(); });
+    control.id = options.controlId;
+    control.setAttribute("data-otacruise-control", "true");
+    control.style.cssText = styles;
+    control.style.pointerEvents = "none";
+    control.title = options.label;
+
+    let checkbox = control.querySelector("input[type='checkbox']");
+    if (!checkbox) {
+      checkbox = document.createElement("input");
+      checkbox.checked = readStoredState();
+      control.prepend(checkbox);
+    }
+    bindCheckbox(checkbox);
+    checkbox.style.pointerEvents = "auto";
+
+    let text = control.querySelector("[data-otacruise-control-label]");
+    if (!text) {
+      text = document.createElement("span");
+      text.setAttribute("data-otacruise-control-label", "true");
+      control.append(text);
+    }
+    text.style.pointerEvents = "none";
+    if (text.textContent !== options.label) text.textContent = options.label;
+    if (!control.isConnected || control.parentElement !== body) body.append(control);
+  }
+
+  if (!pageWindow[observerKey]) {
+    let scheduled = false;
+    function scheduleEnsure() {
+      if (scheduled) return;
+      scheduled = true;
+      queueMicrotask(function () {
+        scheduled = false;
+        ensureControl();
+      });
+    }
+    const documentElement = document.documentElement;
+    if (documentElement) {
+      const observer = new MutationObserver(scheduleEnsure);
+      observer.observe(documentElement, { childList: true, subtree: true });
+      pageWindow[observerKey] = observer;
+    } else {
+      document.addEventListener("DOMContentLoaded", scheduleEnsure, { once: true });
+    }
+  }
+  ensureControl();
+}
+`;
 
 export type KideAuthenticationState =
   | "authenticated"
@@ -181,46 +291,25 @@ export async function assertAuthenticatedSession(page: Page): Promise<void> {
 }
 
 export async function installWatchControl(page: Page): Promise<void> {
-  await page.evaluate(({ controlId, storageKey }) => {
-    if (document.getElementById(controlId) || !document.body) return;
-
-    const control = document.createElement("label");
-    control.id = controlId;
-    control.setAttribute("data-otacruise-control", "true");
-    control.style.cssText = [
-      "position:fixed",
-      "top:12px",
-      "left:12px",
-      "z-index:2147483647",
-      "display:flex",
-      "align-items:center",
-      "gap:6px",
-      "padding:7px 9px",
-      "border:1px solid #777",
-      "border-radius:5px",
-      "background:#fff",
-      "color:#111",
-      "font:12px/1.2 sans-serif",
-      "box-shadow:0 1px 5px rgba(0,0,0,.25)",
-      "cursor:pointer",
-      "user-select:none",
-    ].join(";");
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.id = `${controlId}-checkbox`;
-    checkbox.setAttribute("aria-label", "I am logged in; enable ticket refresh");
-    try {
-      checkbox.checked = window.sessionStorage.getItem(storageKey) === "true";
-    } catch {
-      checkbox.checked = false;
-    }
-
-    const text = document.createElement("span");
-    text.textContent = "I’m logged in — enable refresh";
-    control.append(checkbox, text);
-    document.body.append(control);
-  }, { controlId: WATCH_CONTROL_ID, storageKey: WATCH_ENABLED_STORAGE_KEY });
+  const options: WatchControlPageOptions = {
+    controlId: WATCH_CONTROL_ID,
+    checkboxId: WATCH_CONTROL_CHECKBOX_ID,
+    storageKey: WATCH_ENABLED_STORAGE_KEY,
+    label: WATCH_CONTROL_LABEL,
+  };
+  if (!pagesWithWatchControlInitScript.has(page)) {
+    await page.addInitScript({
+      content: `${WATCH_CONTROL_PAGE_SCRIPT}\notacruiseWatchControl(${JSON.stringify(options)});`,
+    });
+    pagesWithWatchControlInitScript.add(page);
+  }
+  await page.evaluate(
+    ({ script, scriptOptions }) => {
+      const execute = new Function("options", `${script}\notacruiseWatchControl(options);`);
+      execute(scriptOptions);
+    },
+    { script: WATCH_CONTROL_PAGE_SCRIPT, scriptOptions: options },
+  );
 }
 
 async function watchControlIsEnabled(page: Page): Promise<boolean> {
@@ -608,11 +697,20 @@ async function loadProductPage(
     } else {
       await page.goto(eventUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     }
+    // Install immediately after navigation so the control is visible while
+    // Angular finishes rendering and before the API response is interpreted.
+    await installWatchControl(page);
     const payload = await pendingProductResponse.promise;
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
-    if (isSameEventPage) await assertAuthenticatedSession(page);
+    // A pause must take effect before the response is interpreted. This also
+    // prevents a checkbox race from reaching selection or cart code.
+    await waitForWatchEnabled(page);
+    await assertAuthenticatedSession(page);
+    await page.locator(VARIANT_ROW_SELECTOR).first().waitFor({
+      state: "attached",
+      timeout: 15_000,
+    });
     const inspection = await inspectProductPage(page, payload);
-    await installWatchControl(page);
     return inspection;
   } catch (error) {
     pendingProductResponse.cancel();
@@ -763,7 +861,14 @@ export async function addVariantsToCart(
   page: Page,
   variants: TicketVariant[],
 ): Promise<void> {
+  await waitForWatchEnabled(page);
+  await assertAuthenticatedSession(page);
+
   for (const variant of variants) {
+    // Re-check both gates before every click. A pause or logout between rows
+    // must stop the cart sequence before another reservation is attempted.
+    await waitForWatchEnabled(page);
+    await assertAuthenticatedSession(page);
     const rows = page.locator(VARIANT_ROW_SELECTOR).filter({ hasText: variant.name });
     if (await rows.count() !== 1) {
       throw new KideAutomationError(
@@ -772,7 +877,11 @@ export async function addVariantsToCart(
     }
 
     const row = rows.first();
-    if (await row.getAttribute("disabled") !== null || !(await row.isEnabled())) {
+    if (
+      (await row.getAttribute("disabled")) !== null ||
+      (await row.getAttribute("aria-disabled")) === "true" ||
+      !(await row.isEnabled())
+    ) {
       throw new KideAutomationError(
         `Kide marked verified variant "${variant.name}" unavailable before cart selection; no further cart action was attempted.`,
       );
@@ -789,12 +898,21 @@ export async function addVariantsToCart(
       continue;
     }
 
-    if (!visibleTotalPriceMatches(initialRowText, variant.totalPriceCents)) {
+    await waitForWatchEnabled(page);
+    await assertAuthenticatedSession(page);
+
+    const latestRowText = await row.innerText();
+    if (
+      (await row.getAttribute("disabled")) !== null ||
+      (await row.getAttribute("aria-disabled")) === "true" ||
+      !(await row.isEnabled()) ||
+      SOLD_OUT_TEXT.test(latestRowText) ||
+      !visibleTotalPriceMatches(latestRowText, variant.totalPriceCents)
+    ) {
       throw new KideAutomationError(
-        `The visible total price for "${variant.name}" no longer matches the verified API price; no cart action was attempted.`,
+        `Kide changed verified variant "${variant.name}" before cart selection; no further cart action was attempted.`,
       );
     }
-
     await row.click();
     await page.waitForTimeout(250);
     const rowText = await row.innerText();
@@ -829,6 +947,7 @@ async function createBrowserSession(
   if (options.cdpUrl) {
     const browser = await chromium.connectOverCDP(options.cdpUrl);
     const context = browser.contexts()[0] ?? (await browser.newContext());
+    await installStealthContextInitScript(context);
     const page = context.pages().find((candidate) => candidate.url().includes("kide.app")) ??
       (await context.newPage());
     return {
@@ -846,6 +965,7 @@ async function createBrowserSession(
       headless,
       ...(executablePath ? { executablePath } : {}),
     });
+    await installStealthContextInitScript(context);
     return {
       browser: null,
       context,
@@ -861,6 +981,7 @@ async function createBrowserSession(
   const context = await browser.newContext(
     options.storageStatePath ? { storageState: resolve(options.storageStatePath) } : undefined,
   );
+  await installStealthContextInitScript(context);
   return {
     browser,
     context,
@@ -872,9 +993,6 @@ async function createBrowserSession(
 export function resolveBrowserExecutable(): string | undefined {
   const configured = process.env.PLAYWRIGHT_EXECUTABLE_PATH;
   if (configured && existsSync(configured)) return configured;
-
-  const bundled = chromium.executablePath();
-  if (existsSync(bundled)) return bundled;
 
   const candidates = process.platform === "win32"
     ? [
@@ -889,7 +1007,11 @@ export function resolveBrowserExecutable(): string | undefined {
         ]
       : ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
 
-  return candidates.find((candidate) => existsSync(candidate));
+  const installedBrowser = candidates.find((candidate) => existsSync(candidate));
+  if (installedBrowser) return installedBrowser;
+
+  const bundled = chromium.executablePath();
+  return existsSync(bundled) ? bundled : undefined;
 }
 
 function outputForSelection(
@@ -916,7 +1038,7 @@ export async function runKideAutomation(
 ): Promise<AutomationOutput> {
   const eventUrl = options.eventUrl ?? DEFAULT_EVENT_URL;
   const maxWaitMs = options.maxWaitMs ?? 30 * 60 * 1000;
-  const pollIntervalMs = Math.max(options.pollIntervalMs ?? 10_000, 1_000);
+  const pollIntervalMs = Math.max(options.pollIntervalMs ?? 1_000, 1_000);
   const dryRun = options.dryRun ?? false;
   const watchForever = options.watchForever ?? true;
   const keepBrowserOpen = options.keepBrowserOpen ?? true;
@@ -934,6 +1056,8 @@ export async function runKideAutomation(
       pollIntervalMs,
       watchForever,
     });
+    await waitForWatchEnabled(session.page);
+    await assertAuthenticatedSession(session.page);
     const selection = selectFourPersonVariants(inspection.variants);
 
     if (blocker) {
@@ -970,7 +1094,6 @@ export async function runKideAutomation(
     }
 
     try {
-      await waitForWatchEnabled(session.page);
       await addVariantsToCart(session.page, selection.selected);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Cart confirmation failed.";
