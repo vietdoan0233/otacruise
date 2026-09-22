@@ -55,6 +55,19 @@ npm run browser-test
 
 Authentication remains local. By default, the runner uses the persistent Chromium profile `.local/kide-profile`, which keeps the browser’s session cookies and local storage on this machine for future runs. The directory is gitignored, and the automation never extracts, prints, uploads, or commits those values. On the first run, sign in in the visible browser; later runs reuse that local session. Delete `.local/kide-profile` when you intentionally want to sign out and reset the session. A `KIDE_CDP_URL` uses the attached browser’s own profile instead, and `KIDE_STORAGE_STATE` is an optional local alternative. Never commit tokens, cookies, passwords, OTPs, or payment data.
 
+### Optional: automated sign-in
+
+Signing in manually the first time (above) is the default and the safer option, since it never puts your password in a file. If you'd rather not do that by hand, you can instead add your Kide account name and password to `.env`:
+
+```
+KIDE_ACCOUNT_USERNAME=you@example.com
+KIDE_ACCOUNT_PASSWORD=your-kide-password
+```
+
+Both must be set to turn this on; leaving either blank keeps the manual flow. `.env` is gitignored (only the blank `.env.example` is committed), so these values stay on this machine and are never pushed anywhere — but they do sit in plaintext in that file, unlike the default profile, which relies on Chromium's own cookie storage rather than a password the automation itself holds. Weigh that before choosing this over the default.
+
+When both are set, the runner opens the sign-in form once at startup, before the watch loop begins, and only ever fills in those two fields and clicks the one sign-in button — it never touches the Facebook button, "remember me", or anything else in that dialog. It tries this exactly once per run, never inside the polling loop, so a wrong password can't turn into repeated attempts against your account. If Kide shows a Cloudflare challenge inside the sign-in dialog, the runner stops immediately without clicking anything further; it never attempts to solve or bypass that challenge. Either way, whether sign-in worked is still decided the same way as always: by reading the real, visible page afterward (the same checks described above), so a failed or blocked automated attempt just falls back to the usual "authentication could not be verified" reason, and you can sign in by hand instead.
+
 ## Start the watcher
 
 Run `npm run dev` with `HEADLESS=false`. After the Kide event page loads, a visible top-left checkbox labeled exactly `I’m logged in — enable refresh` appears. It starts unchecked:

@@ -5,6 +5,7 @@ import type { Page } from "playwright";
 import {
   addVariantsToCart,
   assertAuthenticatedSession,
+  attemptCredentialLogin,
   inspectAuthenticationState,
   inspectProductPage,
   installWatchControl,
@@ -293,6 +294,118 @@ test("blocks cart activity when the visible Kide UI is unauthenticated, even wit
       /not authenticated|Could not verify/i,
     );
     assert.equal(await page.locator(".o-color--validation-info").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+// Mirrors the real kide.app sign-in dialog (captured by hand from the live
+// site, no credentials entered): clicking the header's "Kirjaudu sisään"
+// chip reveals a "Kirjaudu sisään" <o-menu-item>, and clicking that reveals
+// an <o-dialog ng-controller="LoginController as login"> containing
+// #username, #password, an <o-cloudflare> slot, and a submit button. Both
+// reveals are lazy, matching Kide's own behavior of not creating that DOM
+// until it is opened.
+function kideLoginDialogFixtureHtml(
+  config: { cloudflareChallenge?: boolean; dialogClosesOnSubmit?: boolean; authenticated?: boolean } = {},
+): string {
+  const cloudflareMarkup = config.cloudflareChallenge
+    ? "<o-cloudflare><iframe></iframe></o-cloudflare>"
+    : "<o-cloudflare></o-cloudflare>";
+  const closeOnSubmit = config.dialogClosesOnSubmit ?? true;
+  const authenticatedMarker = config.authenticated ? "<span>Kirjaudu ulos</span>" : "";
+
+  return `<!doctype html><header><o-menu id="o-menu--1"><o-menu-button><o-action-chip id="login-chip">Kirjaudu sisään</o-action-chip></o-menu-button></o-menu></header><main>Otacruise 2026 ${authenticatedMarker}</main><script>
+    window.submitClicks = 0;
+    window.filledValues = [];
+    document.getElementById('login-chip').addEventListener('click', function () {
+      if (document.querySelector('o-menu-item')) return;
+      var item = document.createElement('o-menu-item');
+      item.textContent = 'Kirjaudu sisään';
+      item.addEventListener('click', function () {
+        if (document.querySelector('o-dialog')) return;
+        var dialog = document.createElement('o-dialog');
+        dialog.setAttribute('ng-controller', 'LoginController as login');
+        dialog.innerHTML =
+          '<input id="username" type="text">' +
+          '<input id="password" type="password">' +
+          ${JSON.stringify(cloudflareMarkup)} +
+          '<button type="button">Kirjaudu sisään</button>';
+        dialog.querySelector('button').addEventListener('click', function () {
+          window.submitClicks += 1;
+          window.filledValues.push(
+            document.getElementById('username').value,
+            document.getElementById('password').value,
+          );
+          ${closeOnSubmit ? "dialog.remove();" : ""}
+        });
+        document.body.appendChild(dialog);
+      });
+      document.querySelector('o-menu').appendChild(item);
+    });
+  </script>`;
+}
+
+test("skips automated sign-in entirely when the session is already authenticated", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(kideLoginDialogFixtureHtml({ authenticated: true }));
+    await attemptCredentialLogin(page, { username: "fixture-user", password: "fixture-pass" });
+    assert.equal(await page.locator("o-menu-item").count(), 0);
+    assert.equal(await page.locator("o-dialog").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("fills only the two real sign-in fields and submits once on success", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(kideLoginDialogFixtureHtml({ dialogClosesOnSubmit: true }));
+    await attemptCredentialLogin(page, {
+      username: "fixture-user@example.test",
+      password: "fixture-pass-1234",
+    });
+    assert.equal(await page.evaluate(() => (window as { submitClicks?: number }).submitClicks), 1);
+    assert.deepEqual(
+      await page.evaluate(() => (window as { filledValues?: string[] }).filledValues),
+      ["fixture-user@example.test", "fixture-pass-1234"],
+    );
+    assert.equal(await page.locator("o-dialog").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("never interacts with a visible Cloudflare challenge inside the sign-in dialog", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(kideLoginDialogFixtureHtml({ cloudflareChallenge: true }));
+    await attemptCredentialLogin(page, { username: "fixture-user", password: "fixture-pass" });
+    assert.equal(await page.evaluate(() => (window as { submitClicks?: number }).submitClicks), 0);
+    assert.equal(await page.locator("o-dialog").count(), 1);
+    assert.equal(await page.locator("o-cloudflare iframe").count(), 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("fails closed without hanging when the sign-in attempt is rejected", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(kideLoginDialogFixtureHtml({ dialogClosesOnSubmit: false }));
+    await attemptCredentialLogin(
+      page,
+      { username: "fixture-user", password: "wrong-fixture-pass" },
+      { resultTimeoutMs: 200 },
+    );
+    assert.equal(await page.evaluate(() => (window as { submitClicks?: number }).submitClicks), 1);
+    assert.equal(await page.locator("o-dialog").count(), 1);
+    assert.notEqual(await inspectAuthenticationState(page), "authenticated");
   } finally {
     await browser.close();
   }

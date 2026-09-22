@@ -55,6 +55,17 @@ export type KideAutomationOptions = {
   keepBrowserOpen?: boolean;
   maxWaitMs?: number;
   pollIntervalMs?: number;
+  // Optional one-time automated sign-in. Both must be set to attempt it;
+  // leaving either unset keeps the existing manual-sign-in-then-reuse-profile
+  // behavior unchanged. See attemptCredentialLogin() for what this does and
+  // does not do.
+  accountUsername?: string;
+  accountPassword?: string;
+};
+
+export type KideAccountCredentials = {
+  username: string;
+  password: string;
 };
 
 type BrowserSession = {
@@ -359,6 +370,103 @@ export async function assertAuthenticatedSession(
   } while (Date.now() < deadline);
 
   throw new KideAutomationError(authenticationBlocker(state));
+}
+
+// Verified against the real kide.app login dialog (unauthenticated; no
+// credentials were entered). The controller name is a stable Angular
+// identifier, unlikely to change with styling.
+const LOGIN_DIALOG_SELECTOR = 'o-dialog[ng-controller="LoginController as login"]';
+const LOGIN_MENU_ITEM_TEXT = "Kirjaudu sisään";
+const LOGIN_SUBMIT_TIMEOUT_MS = 5_000;
+const LOGIN_RESULT_TIMEOUT_MS = 15_000;
+
+async function openLoginDialog(page: Page, submitTimeoutMs: number): Promise<boolean> {
+  if ((await page.locator(LOGIN_DIALOG_SELECTOR).count()) > 0) return true;
+
+  // Kide only creates the "Kirjaudu sisään" menu item -- and the dialog
+  // behind it -- once the account menu has been opened at least once, the
+  // same lazy-render behavior documented for inspectAuthenticationState().
+  const menuToggle = page.locator("o-menu-button button, o-menu-button o-action-chip").first();
+  if ((await menuToggle.count()) === 0) return false;
+  await menuToggle.click();
+
+  const loginMenuItem = page.locator("o-menu-item", { hasText: LOGIN_MENU_ITEM_TEXT }).first();
+  try {
+    await loginMenuItem.waitFor({ state: "visible", timeout: submitTimeoutMs });
+  } catch {
+    // No login item appeared -- most likely already authenticated (the item
+    // only renders when `!body.user.isAuthenticated`) or the menu markup
+    // has changed. Either way, leave verification to
+    // assertAuthenticatedSession() rather than guessing here.
+    return false;
+  }
+  await loginMenuItem.click();
+
+  try {
+    await page.locator(LOGIN_DIALOG_SELECTOR).waitFor({ state: "visible", timeout: submitTimeoutMs });
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Attempts a single, one-time automated sign-in using the given credentials,
+ * then returns -- it never asserts that sign-in actually succeeded. Callers
+ * must still call assertAuthenticatedSession() (as runKideAutomation()
+ * already does) to verify the real, visible result; that remains the single
+ * source of truth and fails closed exactly as it would without this
+ * function, including when this attempt did nothing or was blocked.
+ *
+ * Deliberately conservative:
+ * - Only ever fills the two credential fields and clicks the one submit
+ *   button; never touches the Facebook button, "remember me", or any other
+ *   control in the dialog.
+ * - If Kide presents a Cloudflare challenge inside the dialog, this stops
+ *   immediately without clicking submit or interacting with the challenge
+ *   in any way -- solving or bypassing bot-detection challenges is out of
+ *   scope, regardless of whose account this is.
+ * - Never throws, never logs, and never includes the username or password
+ *   in any value it returns. A failed or blocked attempt just leaves the
+ *   page in whatever state it was in for the normal fail-closed checks to
+ *   report.
+ * - Must only be called once per run, before the watch loop starts (see
+ *   runKideAutomation()), never from inside a retry loop -- repeated
+ *   attempts against a login form risk a lockout or rate limit on the real
+ *   account.
+ */
+export async function attemptCredentialLogin(
+  page: Page,
+  credentials: KideAccountCredentials,
+  options: { submitTimeoutMs?: number; resultTimeoutMs?: number } = {},
+): Promise<void> {
+  const submitTimeoutMs = options.submitTimeoutMs ?? LOGIN_SUBMIT_TIMEOUT_MS;
+  const resultTimeoutMs = options.resultTimeoutMs ?? LOGIN_RESULT_TIMEOUT_MS;
+
+  const state = await inspectAuthenticationState(page);
+  if (state === "authenticated") return;
+
+  const opened = await openLoginDialog(page, submitTimeoutMs);
+  if (!opened) return;
+
+  const dialog = page.locator(LOGIN_DIALOG_SELECTOR);
+  try {
+    await dialog.locator("#username").fill(credentials.username);
+    await dialog.locator("#password").fill(credentials.password);
+
+    if ((await dialog.locator("o-cloudflare iframe").count()) > 0) return;
+
+    await dialog.locator("button", { hasText: LOGIN_MENU_ITEM_TEXT }).first().click();
+
+    if ((await dialog.locator("o-cloudflare iframe").count()) > 0) return;
+
+    // Success closes the dialog; a wrong password or an unresolved
+    // challenge leaves it open. Either way, stop waiting here and let
+    // assertAuthenticatedSession() read the real, visible outcome.
+    await dialog.waitFor({ state: "hidden", timeout: resultTimeoutMs });
+  } catch {
+    return;
+  }
 }
 
 export async function installWatchControl(page: Page): Promise<void> {
@@ -1121,6 +1229,20 @@ export async function runKideAutomation(
   });
 
   try {
+    if (options.accountUsername && options.accountPassword) {
+      // Best-effort and one-time, before the watch loop below ever starts.
+      // Errors here are swallowed on purpose: waitForAvailability() below
+      // still performs its own navigation and its own
+      // assertAuthenticatedSession() checks, which remain the only source
+      // of truth for whether the session is actually authenticated.
+      await session.page
+        .goto(eventUrl, { waitUntil: "domcontentloaded", timeout: 30_000 })
+        .catch(() => undefined);
+      await attemptCredentialLogin(session.page, {
+        username: options.accountUsername,
+        password: options.accountPassword,
+      }).catch(() => undefined);
+    }
     const { inspection, blocker } = await waitForAvailability(session.page, {
       eventUrl,
       maxWaitMs,

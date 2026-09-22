@@ -57,6 +57,13 @@ const configuredProfileDir = process.env.KIDE_PROFILE_DIR?.trim();
 const profileDir = configuredProfileDir ||
   (storageStatePath ? undefined : resolve(".local/kide-profile"));
 
+// Optional one-time automated sign-in; both must be set to attempt it. See
+// attemptCredentialLogin() in kide.ts for exactly what this does and does
+// not do. Leaving either unset (the default) keeps signing in manually in
+// the visible browser instead.
+const accountUsername = process.env.KIDE_ACCOUNT_USERNAME?.trim() || undefined;
+const accountPassword = process.env.KIDE_ACCOUNT_PASSWORD || undefined;
+
 let output: AutomationOutput;
 try {
   output = await runKideAutomation({
@@ -70,6 +77,8 @@ try {
     keepBrowserOpen: booleanEnvironment("KIDE_KEEP_BROWSER_OPEN", true),
     maxWaitMs: integerEnvironment("KIDE_MAX_WAIT_MS", 30 * 60 * 1000),
     pollIntervalMs: integerEnvironment("KIDE_POLL_INTERVAL_MS", 1_000),
+    accountUsername,
+    accountPassword,
   });
 } catch (error) {
   output = emptyOutput(errorReason(error));
