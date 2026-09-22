@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 
 import {
   addVariantsToCart,
+  assertAuthenticatedSession,
   inspectAuthenticationState,
   inspectProductPage,
   installWatchControl,
@@ -145,6 +146,24 @@ test("detects only an authenticated or unauthenticated state from visible UI mar
 
     await page.setContent("<main>Otacruise 2026</main>");
     assert.equal(await inspectAuthenticationState(page), "unknown");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("waits for the Angular account marker before failing closed", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<main>Loading account...</main><script>
+      setTimeout(() => {
+        document.body.insertAdjacentHTML(
+          'beforeend',
+          '<button aria-label="Kirjaudu ulos">Kirjaudu ulos</button>',
+        );
+      }, 100);
+    </script>`);
+    await assertAuthenticatedSession(page);
   } finally {
     await browser.close();
   }

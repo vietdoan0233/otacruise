@@ -199,6 +199,9 @@ export type KideAuthenticationState =
   | "unauthenticated"
   | "unknown";
 
+const AUTHENTICATION_WAIT_TIMEOUT_MS = 15_000;
+const AUTHENTICATION_POLL_INTERVAL_MS = 250;
+
 function authenticationBlocker(
   state: Exclude<KideAuthenticationState, "authenticated">,
 ): string {
@@ -284,10 +287,19 @@ export async function inspectAuthenticationState(
 }
 
 export async function assertAuthenticatedSession(page: Page): Promise<void> {
-  const state = await inspectAuthenticationState(page);
-  if (state !== "authenticated") {
-    throw new KideAutomationError(authenticationBlocker(state));
-  }
+  const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
+  let state: KideAuthenticationState = "unknown";
+  do {
+    state = await inspectAuthenticationState(page);
+    if (state === "authenticated") return;
+    if (state === "unauthenticated") {
+      throw new KideAutomationError(authenticationBlocker(state));
+    }
+    if (Date.now() >= deadline) break;
+    await delay(AUTHENTICATION_POLL_INTERVAL_MS);
+  } while (Date.now() < deadline);
+
+  throw new KideAutomationError(authenticationBlocker(state));
 }
 
 export async function installWatchControl(page: Page): Promise<void> {

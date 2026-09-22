@@ -85,7 +85,7 @@ $env:HEADLESS="false"
 npm run dev
 ```
 
-The browser checks the visible login state before each refresh. With the block above, a sold-out response is followed by another reload every second until you pause the checkbox, stop the process, authentication becomes unclear, or a matching ticket is found. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher. If it refreshes once and then stops, read the JSON `reason` printed by the process; `KIDE_WATCH_FOREVER="false"`, an authentication blocker, or a matching ticket are the expected explanations.
+The browser checks the visible login state before each refresh. After a reload, it allows Kide/Angular up to 15 seconds to render a definitive account marker; it still fails closed if authentication remains unclear. With the block above, a sold-out response is followed by another reload every second until you pause the checkbox, stop the process, authentication becomes unclear, or a matching ticket is found. Once a matching ticket is found, it adds it to the cart and remains open. Press `Ctrl+C` to stop the watcher. If it refreshes once and then stops, read the JSON `reason` printed by the process; `KIDE_WATCH_FOREVER="false"`, an authentication blocker, or a matching ticket are the expected explanations.
 
 ### If the page appears stuck
 
@@ -95,7 +95,7 @@ Keep the terminal running `npm run dev` open. Turn on the top-left refresh check
 
 - If the checkbox is missing, confirm the browser is on the configured HTTPS `kide.app/fi/events/<event-id>` page and wait for the page body to finish rendering. The control is recreated after full reloads and Angular body replacements. A temporary profile can be reset by deleting the ignored `.local/kide-profile` directory, then signing in again in the visible browser.
 - If it appears but is unchecked, that is the safe default. Click the checkbox itself; its visual state and `sessionStorage` value change immediately. Leave it unchecked to pause.
-- If the output says authentication is missing or unclear, do not try to bypass the blocker. Sign in manually in the visible local profile and confirm Kide shows a visible account/logout/profile marker, then rerun. The checkbox never counts as proof of authentication.
+- If the output says authentication is missing or unclear, do not try to bypass the blocker. Confirm you signed in inside the browser/profile used by the watcher, wait for Kide to show a visible account/logout/profile marker, then rerun. The watcher allows Angular up to 15 seconds to render that marker, but the checkbox never counts as proof of authentication.
 - The runner never opens checkout or clicks the final payment action. The fixture suite also asserts four cart rows, 16 people, and €1,548 before fees without reaching payment.
 
 For a visible deterministic browser demonstration that uses only a temporary fixture and no real profile, run:
