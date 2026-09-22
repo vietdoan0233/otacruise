@@ -169,6 +169,135 @@ test("waits for the Angular account marker before failing closed", async () => {
   }
 });
 
+// The next fixtures mirror the real kide.app header markup (captured by hand
+// from the live site's DOM): an <o-menu-button> that holds either the
+// "#o-account" icon (mobile nav toggle or authenticated account button) or a
+// "Kirjaudu sisään" chip (desktop, unauthenticated), plus an
+// <o-menu-container>/<o-menu-content> dropdown that Angular does not create
+// in the DOM at all until it is opened at least once.
+function kideAccountIconHtml(): string {
+  return `<header><o-menu id="o-menu--1"><o-menu-button><button class="o-button o-button--icon"><svg class="o-icon o-inverse" focusable="false"><use xlink:href="#o-account" ng-href="#o-account"></use></svg></button></o-menu-button></o-menu></header><main>Otacruise 2026</main>`;
+}
+
+function kideLoginChipHtml(): string {
+  return `<header><o-menu id="o-menu--1"><o-menu-button><o-action-chip class="o-action-chip--primary-dark" ng-click="origin.trackEvent('login', { action: 'click_login_from_appbar' })" ng-bind="::origin.localization.menuLogin">Kirjaudu sisään</o-action-chip></o-menu-button></o-menu></header><main>Otacruise 2026</main>`;
+}
+
+function kideOpenDropdownHtml(): string {
+  return `${kideAccountIconHtml()}<o-menu-container><o-menu-content><o-menu-item>Hei, Testaaja</o-menu-item><o-menu-item ng-click="body.onLogout()">Kirjaudu ulos</o-menu-item></o-menu-content></o-menu-container>`;
+}
+
+// Ticket rows alone, with no header markup, so tests can pair them with
+// whichever authentication header they need instead of inheriting the
+// authenticated "Hei, ..." greeting baked into fixtureHtml().
+function ticketRowsHtml(): string {
+  return `<main>${fixtureVariants
+    .map(
+      ([name, price]) =>
+        `<o-item ng-repeat-start="variant in product.productVariants" class="o-align-items--flex-start"><o-text><o-text__heading>${name}</o-text__heading><o-chip class="o-chip--sm">${price}€</o-chip></o-text></o-item>`,
+    )
+    .join("")}</main><button id="payment">Proceed to payment</button><script>
+      window.paymentAttempts = 0;
+      document.querySelector('#payment').addEventListener('click', () => window.paymentAttempts += 1);
+      document.querySelectorAll('o-item[ng-repeat-start]').forEach((row) => {
+        row.addEventListener('click', () => {
+          const chip = document.createElement('o-chip');
+          chip.className = 'o-color--validation-info';
+          chip.textContent = 'Varattu 1';
+          row.append(chip);
+        });
+      });
+    </script>`;
+}
+
+test("recognizes the real Kide account-menu icon as authenticated while the dropdown is still closed", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    const viewport = page.viewportSize();
+    assert.ok(
+      viewport === null || viewport.width >= 1024,
+      "test relies on Playwright's default desktop-width viewport",
+    );
+    await page.setContent(kideAccountIconHtml());
+    assert.equal(await inspectAuthenticationState(page), "authenticated");
+    assert.equal(await page.locator("o-menu-container").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("still recognizes the desktop login chip as unauthenticated in the same account-menu slot", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(kideLoginChipHtml());
+    assert.equal(await inspectAuthenticationState(page), "unauthenticated");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("recognizes 'Kirjaudu ulos' and a name greeting once the account dropdown actually renders", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(kideOpenDropdownHtml());
+    assert.equal(await inspectAuthenticationState(page), "authenticated");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("does not mistake a visible 'Kirjaudu ulos' control for a login prompt", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<button>Kirjaudu ulos</button>");
+    assert.equal(await inspectAuthenticationState(page), "authenticated");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("fails closed as unknown, without the checkbox bypassing it, when no marker ever renders", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<main>Otacruise 2026</main>");
+    // page.setContent() leaves the document on an opaque origin, where
+    // sessionStorage throws; check the real checkbox through the DOM (as the
+    // other checkbox tests do) instead of pre-seeding storage.
+    await installWatchControl(page);
+    await page.locator(`#${WATCH_CONTROL_CHECKBOX_ID}`).check();
+    assert.equal(await inspectAuthenticationState(page), "unknown");
+    await assert.rejects(
+      assertAuthenticatedSession(page, { timeoutMs: 300, pollIntervalMs: 20 }),
+      /Could not verify/i,
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
+test("blocks cart activity when the visible Kide UI is unauthenticated, even with the checkbox on", async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`${kideLoginChipHtml()}${ticketRowsHtml()}`);
+    await installWatchControl(page);
+    await page.locator(`#${WATCH_CONTROL_CHECKBOX_ID}`).check();
+    const selection = selectFourPersonVariants((await inspectProductPage(page, payload)).variants);
+    await assert.rejects(
+      addVariantsToCart(page, selection.selected),
+      /not authenticated|Could not verify/i,
+    );
+    assert.equal(await page.locator(".o-color--validation-info").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("the refresh checkbox starts unchecked, toggles immediately, and persists both states", async () => {
   const browser = await launchBrowser();
   try {

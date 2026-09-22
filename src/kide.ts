@@ -202,6 +202,15 @@ export type KideAuthenticationState =
 const AUTHENTICATION_WAIT_TIMEOUT_MS = 15_000;
 const AUTHENTICATION_POLL_INTERVAL_MS = 250;
 
+// Kide's header renders this sprite only inside its own account-menu toggle
+// (<o-menu-button><button><svg><use xlink:href="#o-account">...). Below
+// ACCOUNT_MENU_DESKTOP_MIN_WIDTH the same button also opens a generic mobile
+// nav drawer regardless of login state, so it is only trusted as proof of
+// authentication at desktop widths -- which is what this automation actually
+// launches, since it never overrides Playwright's default viewport.
+const ACCOUNT_MENU_ICON_HREF = "#o-account";
+const ACCOUNT_MENU_DESKTOP_MIN_WIDTH = 1024;
+
 function authenticationBlocker(
   state: Exclude<KideAuthenticationState, "authenticated">,
 ): string {
@@ -214,80 +223,130 @@ function authenticationBlocker(
 export async function inspectAuthenticationState(
   page: Page,
 ): Promise<KideAuthenticationState> {
-  return page.evaluate(() => {
-    const bodyText = document.body?.innerText ?? "";
-    let interactiveText = "";
-    for (const element of Array.from(
-      document.querySelectorAll("button, a, [role='button'], [ng-click]"),
-    )) {
-      const style = window.getComputedStyle(element);
-      const rectangle = element.getBoundingClientRect();
-      if (
-        style.display === "none" ||
-        style.visibility === "hidden" ||
-        rectangle.width <= 0 ||
-        rectangle.height <= 0
-      ) continue;
-      interactiveText += [
-        element.textContent ?? "",
-        element.getAttribute("aria-label") ?? "",
-        element.getAttribute("title") ?? "",
-        element.getAttribute("ng-click") ?? "",
-        element.getAttribute("href") ?? "",
-      ].join(" ");
-    }
-    const visibleText = `${bodyText} ${interactiveText}`.toLowerCase();
-
-    let hasAccountControl = false;
-    for (const element of Array.from(document.querySelectorAll("[ng-click]"))) {
-      const style = window.getComputedStyle(element);
-      const rectangle = element.getBoundingClientRect();
-      if (
-        style.display !== "none" &&
-        style.visibility !== "hidden" &&
-        rectangle.width > 0 &&
-        rectangle.height > 0 &&
-        /account\.profile|account\.settings/i.test(
-          element.getAttribute("ng-click") ?? "",
+  // Every predicate below is written as a bare inline arrow, never assigned
+  // to a local name (not even `const isVisible = ...`). tsx/esbuild rewrites
+  // a *named* helper declared in this scope into a call to a `__name(...)`
+  // runtime helper that lives outside this function; Playwright serializes
+  // only this function's own source for the browser, so that helper is
+  // undefined there and every call throws "ReferenceError: __name is not
+  // defined". Bare, unnamed function expressions passed directly as
+  // arguments are not rewritten and serialize cleanly, so any visibility
+  // check that needs to run more than once is duplicated inline instead of
+  // factored out.
+  return page.evaluate(
+    ({ accountIconHref, desktopMinWidth }) => {
+      const bodyText = document.body?.innerText ?? "";
+      const interactiveText = Array.from(
+        document.querySelectorAll("button, a, [role='button'], [ng-click]"),
+      )
+        .filter((element) => {
+          const style = window.getComputedStyle(element);
+          const rectangle = element.getBoundingClientRect();
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            rectangle.width > 0 &&
+            rectangle.height > 0
+          );
+        })
+        .map((element) =>
+          [
+            element.textContent ?? "",
+            element.getAttribute("aria-label") ?? "",
+            element.getAttribute("title") ?? "",
+            element.getAttribute("ng-click") ?? "",
+            element.getAttribute("href") ?? "",
+          ].join(" "),
         )
-      ) {
-        hasAccountControl = true;
-        break;
-      }
-    }
-    const hasAuthenticatedControl =
-      /logout|log out|sign out|kirjaudu ulos/.test(visibleText) ||
-      hasAccountControl;
-    const hasAuthenticatedGreeting =
-      /\bhei\b/.test(bodyText.toLowerCase()) &&
-      /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i.test(bodyText);
-    let hasLoginAction = false;
-    for (const element of Array.from(document.querySelectorAll("[ng-click]"))) {
-      const style = window.getComputedStyle(element);
-      const rectangle = element.getBoundingClientRect();
-      if (
-        style.display !== "none" &&
-        style.visibility !== "hidden" &&
-        rectangle.width > 0 &&
-        rectangle.height > 0 &&
-        /showlogin|login/i.test(element.getAttribute("ng-click") ?? "")
-      ) {
-        hasLoginAction = true;
-        break;
-      }
-    }
-    const hasLoginControl =
-      /\blogin\b|\bsign in\b|\bkirjaudu\b/.test(visibleText) ||
-      hasLoginAction;
+        .join(" ");
+      const visibleText = `${bodyText} ${interactiveText}`.toLowerCase();
 
-    if (hasAuthenticatedControl || hasAuthenticatedGreeting) return "authenticated";
-    if (hasLoginControl) return "unauthenticated";
-    return "unknown";
-  });
+      const hasLogoutMarker =
+        /\bkirjaudu\s+ulos\b/.test(visibleText) ||
+        /\blog\s*out\b|\bsign\s*out\b/.test(visibleText);
+
+      // The dropdown behind Kide's account-menu button (o-menu-container /
+      // o-menu-content) is not created in the DOM at all until it is opened
+      // at least once, so it never appears while the session is merely
+      // sitting authenticated with the menu closed. The toggle button itself
+      // is the one marker that is actually present at that point.
+      const hasAccountMenuControl =
+        window.innerWidth >= desktopMinWidth &&
+        Array.from(document.querySelectorAll("o-menu-button button, o-menu-button a"))
+          .filter((element) => element.innerHTML.includes(accountIconHref))
+          .some((element) => {
+            const style = window.getComputedStyle(element);
+            const rectangle = element.getBoundingClientRect();
+            return (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              rectangle.width > 0 &&
+              rectangle.height > 0
+            );
+          });
+
+      const hasEmailGreeting =
+        /\bhei\b/.test(bodyText.toLowerCase()) &&
+        /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i.test(bodyText);
+
+      // Some accounts greet by first name rather than e-mail. Scope that
+      // reading to the account menu itself so unrelated page copy that
+      // happens to contain "Hei" is never mistaken for a login greeting.
+      const hasScopedNameGreeting = Array.from(
+        document.querySelectorAll("o-menu-item, o-menu-content"),
+      ).some((element) => {
+        const style = window.getComputedStyle(element);
+        const rectangle = element.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rectangle.width > 0 &&
+          rectangle.height > 0 &&
+          /\bhei\b/i.test(element.textContent ?? "")
+        );
+      });
+
+      const hasAuthenticatedMarker =
+        hasLogoutMarker ||
+        hasAccountMenuControl ||
+        hasEmailGreeting ||
+        hasScopedNameGreeting;
+
+      const hasLoginAction = Array.from(document.querySelectorAll("[ng-click]")).some(
+        (element) => {
+          const style = window.getComputedStyle(element);
+          const rectangle = element.getBoundingClientRect();
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            rectangle.width > 0 &&
+            rectangle.height > 0 &&
+            /showlogin|login/i.test(element.getAttribute("ng-click") ?? "")
+          );
+        },
+      );
+      // "Kirjaudu" alone is ambiguous in Finnish: it is also the first word
+      // of "Kirjaudu ulos" (log out). Exclude that phrase so a visible
+      // logout control can never be misread as a login prompt.
+      const hasLoginControl =
+        /\blogin\b|\bsign in\b|\bkirjaudu\b(?!\s+ulos)/.test(visibleText) ||
+        hasLoginAction;
+
+      if (hasAuthenticatedMarker) return "authenticated";
+      if (hasLoginControl) return "unauthenticated";
+      return "unknown";
+    },
+    { accountIconHref: ACCOUNT_MENU_ICON_HREF, desktopMinWidth: ACCOUNT_MENU_DESKTOP_MIN_WIDTH },
+  );
 }
 
-export async function assertAuthenticatedSession(page: Page): Promise<void> {
-  const deadline = Date.now() + AUTHENTICATION_WAIT_TIMEOUT_MS;
+export async function assertAuthenticatedSession(
+  page: Page,
+  options: { timeoutMs?: number; pollIntervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? AUTHENTICATION_WAIT_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? AUTHENTICATION_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
   let state: KideAuthenticationState = "unknown";
   do {
     state = await inspectAuthenticationState(page);
@@ -296,7 +355,7 @@ export async function assertAuthenticatedSession(page: Page): Promise<void> {
       throw new KideAutomationError(authenticationBlocker(state));
     }
     if (Date.now() >= deadline) break;
-    await delay(AUTHENTICATION_POLL_INTERVAL_MS);
+    await delay(pollIntervalMs);
   } while (Date.now() < deadline);
 
   throw new KideAutomationError(authenticationBlocker(state));

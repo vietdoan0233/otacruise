@@ -18,6 +18,18 @@ The browser is created through a single `playwright-extra` launcher with `puppet
 
 If the live page reports all nine ticket rows as sold out, using `Loppuun varattu` and `Loppuunmyyty`, the runner recognizes both labels, returns the exact blocker in the structured `reason` field, and makes no cart change.
 
+## How authentication is detected
+
+The runner never trusts the refresh checkbox, cookies, or the absence of a login button as proof of sign-in. It reads the same visible markers a person would check, in this order, and treats a page as authenticated as soon as any one of them is confirmed:
+
+- The literal Finnish log-out text `Kirjaudu ulos`, or `log out`/`sign out`, visible anywhere on the page.
+- Kide's own account-menu button in the top-right corner of the header. On kide.app this button is only rendered for a signed-in user (or as a generic mobile navigation toggle at narrow widths — see below), so it is a reliable marker even while its dropdown is closed. Kide only creates that dropdown's contents in the page the first time it is opened, so the closed button is deliberately treated as sufficient on its own; the runner does not click it.
+- A "Hei, …" greeting next to an email address, or a "Hei, …" greeting inside the account menu itself (scoped there so unrelated page text can't be mistaken for it).
+
+If none of those are visible, the runner checks for a visible login prompt (`Kirjaudu`, `Kirjaudu sisään`, `login`, `sign in`) to report a clear "not authenticated" reason. If neither an authenticated nor a login marker is visible — for example while Angular is still rendering the header right after a reload — it polls the page for up to 15 seconds before giving up and reporting that authentication could not be verified. It never reloads, fetches another availability snapshot, selects a ticket, or touches the cart while any of this is unresolved.
+
+The account-menu button check only trusts the button at a normal desktop browser width (matching Playwright's default 1280×720 window, which this project never overrides). If the visible Chromium window is resized very narrow — for example snapped to a small fraction of the screen — kide.app itself switches that same button into a generic mobile navigation toggle that appears whether or not you are signed in, so keep the watcher's window at a normal desktop size.
+
 ## Get the repository
 
 Anyone with Git and Node.js can install it in their own directory:
@@ -96,6 +108,7 @@ Keep the terminal running `npm run dev` open. Turn on the top-left refresh check
 - If the checkbox is missing, confirm the browser is on the configured HTTPS `kide.app/fi/events/<event-id>` page and wait for the page body to finish rendering. The control is recreated after full reloads and Angular body replacements. A temporary profile can be reset by deleting the ignored `.local/kide-profile` directory, then signing in again in the visible browser.
 - If it appears but is unchecked, that is the safe default. Click the checkbox itself; its visual state and `sessionStorage` value change immediately. Leave it unchecked to pause.
 - If the output says authentication is missing or unclear, do not try to bypass the blocker. Confirm you signed in inside the browser/profile used by the watcher, wait for Kide to show a visible account/logout/profile marker, then rerun. The watcher allows Angular up to 15 seconds to render that marker, but the checkbox never counts as proof of authentication.
+- If you are visibly signed in (the account menu shows a greeting, an email, and "Kirjaudu ulos") but still see this blocker, check the size of the visible Chromium window. The runner recognizes Kide's account-menu button even while its dropdown is closed, but only at a normal desktop width; a window resized or snapped very narrow makes kide.app itself switch that button into a generic mobile menu toggle that no longer proves you are signed in. Restore the window to a normal desktop size and rerun — the default launch never shrinks it, so this only matters if you resized it yourself.
 - The runner never opens checkout or clicks the final payment action. The fixture suite also asserts four cart rows, 16 people, and €1,548 before fees without reaching payment.
 
 For a visible deterministic browser demonstration that uses only a temporary fixture and no real profile, run:
